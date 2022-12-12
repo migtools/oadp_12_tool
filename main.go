@@ -62,6 +62,9 @@ func main() {
 		}
 		panic(err.Error())
 	}
+
+	// Now that VSCs are all ready, we can generate VolumeSnapshotBackups
+	// and batch them waiting for them to complete
 }
 
 func waitForVSCsToBeReady(ctx context.Context, c client.Client, name string) error {
