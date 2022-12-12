@@ -4,18 +4,19 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"path/filepath"
+	"time"
+
 	"github.com/google/uuid"
 	v1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	"log"
-	"os"
-	"path/filepath"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"time"
 )
 
 var namespaces = []string{
@@ -38,7 +39,10 @@ func main() {
 	if err != nil {
 		panic(err.Error())
 	}
-	c, err := client.New(config, client.Options{})
+	scheme := runtime.NewScheme()
+	velerov1.AddToScheme(scheme)
+	v1.AddToScheme(scheme)
+	c, err := client.New(config, client.Options{Scheme: scheme})
 	if err != nil {
 		panic(err.Error())
 	}
@@ -56,7 +60,7 @@ func main() {
 		if err == wait.ErrWaitTimeout {
 			log.Printf("Timed out waiting for VSCs to be ready")
 		}
-		os.Exit(1)
+		panic(err.Error())
 	}
 }
 
@@ -73,7 +77,7 @@ func waitForVSCsToBeReady(ctx context.Context, c client.Client, name string) err
 			return false, nil
 
 		}
-		log.Printf("found %v total snapshots")
+		log.Printf("found %v total snapshots", len(vscList.Items))
 		readyVscs := []string{}
 		unreadyVscs := []string{}
 		for _, vsc := range vscList.Items {
@@ -111,5 +115,5 @@ func createBackup(ctx context.Context, c client.Client, namespaces []string) (st
 	b.Spec.IncludedNamespaces = namespaces
 	b.Namespace = "openshift-adp"
 	b.Name = name.String()
-	return name.String(), c.Create(ctx, &b, nil)
+	return name.String(), c.Create(ctx, &b)
 }
