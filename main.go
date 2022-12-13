@@ -27,6 +27,7 @@ var namespaces = []string{
 }
 
 func main() {
+	resticSecretName := flag.String("restic-secret", "dpa-sample-1-volsync-restic", "name of restic secret for volsync to use")
 	ctx := context.Background()
 	// Build client from default kubeconfig or --kubeconfig flag
 	var kubeconfig *string
