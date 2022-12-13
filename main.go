@@ -48,6 +48,7 @@ func main() {
 	scheme := runtime.NewScheme()
 	velerov1.AddToScheme(scheme)
 	v1.AddToScheme(scheme)
+	dmv1.AddToScheme(scheme)
 	c, err := client.New(config, client.Options{Scheme: scheme})
 	if err != nil {
 		panic(err.Error())
