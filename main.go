@@ -99,7 +99,8 @@ func main() {
 					GenerateName: "vsb-",
 					Namespace:    vsc.Spec.VolumeSnapshotRef.Namespace,
 					Labels: map[string]string{
-						"perf-test": name,
+						"perf-test":             name,
+						"velero.io/backup-name": name,
 					},
 				},
 
@@ -133,7 +134,7 @@ func main() {
 	volsyncTimeComplete := time.Now()
 	volsyncTime := volsyncTimeComplete.Sub(snapshotEndTime)
 	totalTime := volsyncTimeComplete.Sub(snapshotStartTime)
-	log.Printf("Volsync time elapsed: %v", volsyncTime.String())
+	log.Printf("Data Mover time elapsed: %v", volsyncTime.String())
 	log.Printf("Total time: %v", totalTime.String())
 }
 
@@ -184,15 +185,14 @@ func waitForVSBsToComplete(ctx context.Context, c client.Client, name string) er
 			return false, nil
 
 		}
-		log.Printf("found %v total snapshots", len(vscList.Items))
 		readyVscs := []string{}
 		running := []string{}
 		for _, vsc := range vscList.Items {
-			if !vsc.Status.Completed {
+			if vsc.Status.Phase == dmv1.SnapMoverVolSyncPhaseCompleted || vsc.Status.Phase == dmv1.SnapMoverBackupPhaseCompleted {
+				readyVscs = append(readyVscs, vsc.Name)
+			} else {
 				running = append(running, vsc.Name)
-				continue
 			}
-			readyVscs = append(readyVscs, vsc.Name)
 		}
 		log.Printf("found %v completed VSBs, and %v running VSBs", len(readyVscs), len(running))
 
