@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,12 +23,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-var namespaces = []string{
-	"mysql-persistent",
-}
-
 func main() {
 	resticSecretName := flag.String("restic-secret", "dpa-sample-1-volsync-restic", "name of restic secret for volsync to use")
+	namespacesInput := flag.String("namespaces", "", "comma separated list of namespaces to backup")
 	ctx := context.Background()
 	// Build client from default kubeconfig or --kubeconfig flag
 	var kubeconfig *string
@@ -38,6 +36,10 @@ func main() {
 	}
 	flag.Parse()
 
+	namespaces := strings.Split(*namespacesInput, ",")
+	if *namespacesInput == "" {
+		panic(errors.New("missing namespaces flag"))
+	}
 	// use the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
@@ -106,7 +108,7 @@ func main() {
 					},
 					ProtectedNamespace: "openshift-adp",
 					ResticSecretRef: corev1.LocalObjectReference{
-						Name: "restic-secret",
+						Name: *resticSecretName,
 					},
 				},
 			}
