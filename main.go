@@ -9,9 +9,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	dmv1 "github.com/konveyor/volume-snapshot-mover/api/v1alpha1"
 	v1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/clientcmd"
@@ -46,6 +49,10 @@ func main() {
 	if err != nil {
 		panic(err.Error())
 	}
+
+	// Register start time for snapshots
+	snapshotStartTime := time.Now()
+
 	// create backup to get all CSI snapshots in the cluster
 	name, err := createBackup(ctx, c, namespaces)
 	if err != nil {
@@ -63,8 +70,67 @@ func main() {
 		panic(err.Error())
 	}
 
+	snapshotEndTime := time.Now()
+	snapshotTime := snapshotEndTime.Sub(snapshotStartTime)
+	log.Printf("Snapshot time elapsed: %v", snapshotTime.String())
+
 	// Now that VSCs are all ready, we can generate VolumeSnapshotBackups
 	// and batch them waiting for them to complete
+	vscList, err := listVolumeSnapshotContents(ctx, c, name)
+	if err != nil {
+		panic(err)
+	}
+	// create 12 VSBs at a time
+	for i := 0; i < len(vscList.Items); i += 12 {
+		var section []v1.VolumeSnapshotContent
+		if i > len(vscList.Items)-12 {
+			section = vscList.Items[i:]
+		} else {
+			section = vscList.Items[i : i+12]
+		}
+		log.Printf("Processing %v volumesnapshotcontents", len(section))
+		for _, vsc := range section {
+			vsb := dmv1.VolumeSnapshotBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "vsb-",
+					Namespace:    vsc.Spec.VolumeSnapshotRef.Namespace,
+					Labels: map[string]string{
+						"perf-test": name,
+					},
+				},
+
+				Spec: dmv1.VolumeSnapshotBackupSpec{
+					VolumeSnapshotContent: corev1.ObjectReference{
+						Name: vsc.Name,
+					},
+					ProtectedNamespace: "openshift-adp",
+					ResticSecretRef: corev1.LocalObjectReference{
+						Name: "restic-secret",
+					},
+				},
+			}
+			err := c.Create(ctx, &vsb)
+			if err != nil {
+				log.Printf("ERROR creating VSB for vsc %s; %v", vsc.Name, err.Error())
+			}
+
+		}
+		// wait for VSBs to be complete
+
+		err = waitForVSBsToComplete(ctx, c, name)
+		if err != nil {
+			if err == wait.ErrWaitTimeout {
+				log.Printf("Timed out waiting for VSBs to be ready")
+			}
+			panic(err.Error())
+		}
+	}
+
+	volsyncTimeComplete := time.Now()
+	volsyncTime := volsyncTimeComplete.Sub(snapshotEndTime)
+	totalTime := volsyncTimeComplete.Sub(snapshotStartTime)
+	log.Printf("Volsync time elapsed: %v", volsyncTime.String())
+	log.Printf("Total time: %v", totalTime.String())
 }
 
 func waitForVSCsToBeReady(ctx context.Context, c client.Client, name string) error {
@@ -99,7 +165,40 @@ func waitForVSCsToBeReady(ctx context.Context, c client.Client, name string) err
 		return true, nil
 	})
 	return err
+}
 
+func waitForVSBsToComplete(ctx context.Context, c client.Client, name string) error {
+	timeout := 120 * time.Minute
+	interval := 5 * time.Second
+	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
+		vscList, err := listVolumeSnapshotBackups(ctx, c, name)
+		if err != nil {
+			return false, errors.Wrapf(err, fmt.Sprintf("failed to list volumesnapshotcontents %s", err.Error()))
+		}
+		if len(vscList.Items) == 0 {
+			log.Printf("found no snapshots yet, waiting...")
+			return false, nil
+
+		}
+		log.Printf("found %v total snapshots", len(vscList.Items))
+		readyVscs := []string{}
+		running := []string{}
+		for _, vsc := range vscList.Items {
+			if !vsc.Status.Completed {
+				running = append(running, vsc.Name)
+				continue
+			}
+			readyVscs = append(readyVscs, vsc.Name)
+		}
+		log.Printf("found %v completed VSBs, and %v running VSBs", len(readyVscs), len(running))
+
+		if len(running) != 0 {
+			return false, nil
+		}
+
+		return true, nil
+	})
+	return err
 }
 
 func listVolumeSnapshotContents(ctx context.Context, c client.Client, name string) (*v1.VolumeSnapshotContentList, error) {
@@ -110,6 +209,16 @@ func listVolumeSnapshotContents(ctx context.Context, c client.Client, name strin
 	listOptions := client.MatchingLabels(labels)
 	err := c.List(ctx, &vsc, listOptions)
 	return &vsc, err
+}
+
+func listVolumeSnapshotBackups(ctx context.Context, c client.Client, name string) (*dmv1.VolumeSnapshotBackupList, error) {
+	vsb := dmv1.VolumeSnapshotBackupList{}
+	labels := map[string]string{
+		"perf-test": name,
+	}
+	listOptions := client.MatchingLabels(labels)
+	err := c.List(ctx, &vsb, listOptions)
+	return &vsb, err
 }
 
 func createBackup(ctx context.Context, c client.Client, namespaces []string) (string, error) {
