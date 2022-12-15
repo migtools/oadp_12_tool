@@ -16,7 +16,9 @@ import (
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
@@ -64,6 +66,15 @@ func main() {
 	}
 	log.Printf("backup created openshift-adp/%s. To monitor VSCs run:", name)
 	log.Printf("oc get volumesnapshotcontents -l velero.io/backup-name=%s", name)
+
+	// Wait for backup to complete
+	err = waitForBackupToComplete(ctx, c, name)
+	if err != nil {
+		if err == wait.ErrWaitTimeout {
+			log.Printf("Timed out waiting for Backup to complete")
+		}
+		panic(err.Error())
+	}
 
 	// Sit and wait for all VSCs to be in a ready to use state
 	err = waitForVSCsToBeReady(ctx, c, name)
@@ -136,6 +147,25 @@ func main() {
 	totalTime := volsyncTimeComplete.Sub(snapshotStartTime)
 	log.Printf("Data Mover time elapsed: %v", volsyncTime.String())
 	log.Printf("Total time: %v", totalTime.String())
+}
+
+func waitForBackupToComplete(ctx context.Context, c client.Client, name string) error {
+	timeout := 120 * time.Minute
+	interval := 5 * time.Second
+	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
+		backup := velerov1.Backup{}
+		err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: "openshift-adp"}, &backup)
+		if err != nil {
+			return false, errors.Wrapf(err, fmt.Sprintf("failed to get backup"))
+		}
+		if backup.Status.Phase == velerov1.BackupPhaseCompleted {
+			return true, nil
+		}
+		log.Printf("Backup phase: %v", backup.Status.Phase)
+
+		return false, nil
+	})
+	return err
 }
 
 func waitForVSCsToBeReady(ctx context.Context, c client.Client, name string) error {
