@@ -28,6 +28,7 @@ import (
 func main() {
 	resticSecretName := flag.String("restic-secret", "dpa-sample-1-volsync-restic", "name of restic secret for volsync to use")
 	namespacesInput := flag.String("namespaces", "", "comma separated list of namespaces to backup")
+	concurrentInput := flag.Int("concurrent", 12, "number of concurrent volumesnapshotbackups to run")
 	ctx := context.Background()
 	// Build client from default kubeconfig or --kubeconfig flag
 	var kubeconfig *string
@@ -96,12 +97,12 @@ func main() {
 		panic(err)
 	}
 	// create 12 VSBs at a time
-	for i := 0; i < len(vscList.Items); i += 12 {
+	for i := 0; i < len(vscList.Items); i += *concurrentInput {
 		var section []v1.VolumeSnapshotContent
-		if i > len(vscList.Items)-12 {
+		if i > len(vscList.Items)-*concurrentInput {
 			section = vscList.Items[i:]
 		} else {
-			section = vscList.Items[i : i+12]
+			section = vscList.Items[i : i+*concurrentInput]
 		}
 		log.Printf("Processing %v volumesnapshotcontents", len(section))
 		for _, vsc := range section {
