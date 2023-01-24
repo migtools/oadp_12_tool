@@ -29,6 +29,7 @@ func main() {
 	resticSecretName := flag.String("restic-secret", "dpa-sample-1-volsync-restic", "name of restic secret for volsync to use")
 	namespacesInput := flag.String("namespaces", "", "comma separated list of namespaces to backup")
 	concurrentInput := flag.Int("concurrent", 12, "number of concurrent volumesnapshotbackups to run")
+	labelSelectorsInput := flag.String("selectors", "", "comma seperated list of labels to be used as criteria for backup")
 	ctx := context.Background()
 	// Build client from default kubeconfig or --kubeconfig flag
 	var kubeconfig *string
@@ -43,6 +44,17 @@ func main() {
 	if *namespacesInput == "" {
 		panic(errors.New("missing namespaces flag"))
 	}
+	var labelSelectorsMap = make(map[string]string)
+	if len(*labelSelectorsInput) > 0 {
+		labelSelectors := strings.Split(*labelSelectorsInput, ",")
+		for _, l := range labelSelectors {
+			splitStr := strings.Split(l, "=")
+			key := splitStr[0]
+			value := splitStr[1]
+			labelSelectorsMap[key] = value
+		}
+	}
+
 	// use the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
@@ -61,7 +73,7 @@ func main() {
 	snapshotStartTime := time.Now()
 
 	// create backup to get all CSI snapshots in the cluster
-	name, err := createBackup(ctx, c, namespaces)
+	name, err := createBackup(ctx, c, namespaces, labelSelectorsMap)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -256,10 +268,19 @@ func listVolumeSnapshotBackups(ctx context.Context, c client.Client, name string
 	return &vsb, err
 }
 
-func createBackup(ctx context.Context, c client.Client, namespaces []string) (string, error) {
+func createBackup(ctx context.Context, c client.Client, namespaces []string, labelSelectorsMap map[string]string) (string, error) {
 	name := uuid.New()
 	b := velerov1.Backup{}
 	b.Spec.IncludedNamespaces = namespaces
+
+	if labelSelectorsMap != nil {
+		labels := metav1.LabelSelector{
+			MatchLabels: labelSelectorsMap,
+		}
+
+		b.Spec.LabelSelector = &labels
+	}
+
 	b.Namespace = "openshift-adp"
 	b.Name = name.String()
 	return name.String(), c.Create(ctx, &b)
